@@ -1,0 +1,14 @@
+# ignore logs
+/logs
+# igonre checkpoints
+/checkpoints
+# ignore  vis
+/vis
+# ignore drawVideo
+/drawVideo
+# ignore data 
+/data
+# ignore generate_dataset
+/generate_dataset
+# ignore video
+/video
