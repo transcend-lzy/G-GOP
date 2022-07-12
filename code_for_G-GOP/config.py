@@ -13,7 +13,6 @@ def read_yaml(yaml_path):
 
 
 class DefaultConfig(object):
-    env = 'default'  # visdom 环境
     postfix = ''
     obj_id = 6
     main_path = "../"

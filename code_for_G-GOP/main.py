@@ -1,3 +1,4 @@
+import argparse
 import math
 import os
 
@@ -170,7 +171,7 @@ def get_result(loss_meter, z2, z1, x2, model, is_refine=None, result_pick_all=No
         output_show = copy.deepcopy(output[0].cpu().detach().numpy())
         np.place(output_show, output_show > 0.4, 255)
         cv2.imwrite(osp.join(opt.vis_path, str(dim) + '.jpg'), output_show)
-        print("result %s loss is %s loss2 is %s loss3 is %s" % (dim, loss, match_loss, not_match_loss))
+        # print("result %s loss is %s loss2 is %s loss3 is %s" % (dim, loss, match_loss, not_match_loss))
         if loss < loss_min:
             loss_min_index = dim
             loss_min = loss
@@ -184,9 +185,9 @@ def get_result(loss_meter, z2, z1, x2, model, is_refine=None, result_pick_all=No
     return contour_best, result_pick_all
 
 
-def test(scene_id):
+def test(scene_dir_name):
     result_pick, result_numpy = [], []
-    scene_path = osp.join(opt.test_data_root, 'scene' + str(scene_id))
+    scene_path = osp.join(opt.test_data_root, scene_dir_name)
     model = VAE_NEW(opt.latent_dim, opt.dim)
     model = nn.DataParallel(model).to(device)
     if osp.exists(opt.save_model_path):
@@ -304,5 +305,12 @@ def train():
 
 
 if __name__ == '__main__':
-    test(23)
-    # train()
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--train", type=bool, default=False)
+    parser.add_argument("--scene_dir_name", type=str, default='scene23')
+
+    args = parser.parse_args()
+    if args.train:
+        train()
+    else:
+        test(args.scene_dir_name)
