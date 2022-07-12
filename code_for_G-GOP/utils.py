@@ -40,6 +40,27 @@ xmin, xmax = Xrange[0] - 0.1, Xrange[1] + 0.1
 ymin, ymax = Zrange[0] - 0.1, Zrange[1] + 0.1
 rmin, rmax = Rrange[0] - 0.05, Rrange[1] + 0.05
 
+def min_max(pose):
+    pose_new = np.zeros(6)
+    pose_new[0] = (pose[0] - amin) / (amax - amin)
+    pose_new[1] = (pose[1] - bmin) / (bmax - bmin)
+    pose_new[2] = (pose[2] - gmin) / (gmax - gmin)
+    pose_new[3] = (pose[3] - xmin) / (xmax - xmin)
+    pose_new[4] = (pose[4] - ymin) / (ymax - ymin)
+    pose_new[5] = (pose[5] - rmin) / (rmax - rmin)
+    return pose_new
+
+
+def min_max_rollback(pose_new):
+    pose = np.zeros(6)
+    pose[0] = pose_new[0] * (amax - amin) + amin
+    pose[1] = pose_new[1] * (bmax - bmin) + bmin
+    pose[2] = pose_new[2] * (gmax - gmin) + gmin
+    pose[3] = pose_new[3] * (xmax - xmin) + xmin
+    pose[4] = pose_new[4] * (ymax - ymin) + ymin
+    pose[5] = pose_new[5] * (rmax - rmin) + rmin
+    return pose
+
 
 def mkdir(path):
     if not osp.exists(path):
@@ -60,16 +81,16 @@ def clip_and_scaling(img, xywh, bbox_range, mask=None, mask_small=None):
         # show_photos([mask_ori, maskCopy])
         np.place(maskCopy, maskCopy > 0, 255)
         img = cv2.bitwise_and(img, img, mask=maskCopy)
-        show_photos([img, maskCopy])
+        # show_photos([img, maskCopy])
     x, y, w, h = xywh[0], xywh[1], xywh[2], xywh[3]
     img = img[y: y + h, x: x + w, :]
 
-    canny_img = cv2.Canny(img, 300, 400)
+    canny_img = cv2.Canny(img, 200, 300)
 
-    show_photos([canny_img])
+    # show_photos([canny_img])
     kernel = np.ones((2, 2), np.uint8)
     canny_img = cv2.dilate(canny_img, kernel, iterations=1)
-    show_photos([canny_img])
+    # show_photos([canny_img])
     canny_img = cv2.morphologyEx(canny_img, cv2.MORPH_OPEN, kernel)
     border_top_bottom = bbox_range - h
     if border_top_bottom % 2 == 0:
@@ -92,7 +113,7 @@ def clip_and_scaling(img, xywh, bbox_range, mask=None, mask_small=None):
         kernel = np.ones((10, 10), np.uint8)
         erosion = cv2.erode(mask_small_copy, kernel, iterations=1)
         constant = cv2.bitwise_and(constant, constant, mask=erosion)
-        show_photos([mask_small_copy, erosion, constant])
+        # show_photos([mask_small_copy, erosion, constant])
     res = cv2.resize(constant, (128, 128), interpolation=cv2.INTER_AREA)
 
     # show_photos([canny_img, constant, res])

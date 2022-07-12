@@ -1,7 +1,7 @@
 # ignore logs
 /logs
 # igonre checkpoints
-/checkpoints
+/checkpoint
 # ignore  vis
 /vis
 # ignore drawVideo
@@ -12,3 +12,5 @@
 /generate_dataset
 # ignore video
 /video
+
+/code_for_G-GOP_ori

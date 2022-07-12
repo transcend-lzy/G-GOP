@@ -17,70 +17,38 @@ import warnings
 from torchnet import meter
 import random
 import copy
+from overlayAbg import OverLay
 
 warnings.filterwarnings('ignore')
 from tensorboardX import SummaryWriter
-from pytorch_msssim import ssim, ms_ssim, SSIM, MS_SSIM
 
 init()
 # 配置GPU或CPU设置
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 writer_train = SummaryWriter(opt.log_train)
 writer_test = SummaryWriter(opt.log_test)
-a_scope = ranges['Arange'][0][1] - ranges['Arange'][0][0]
-b_scope = ranges['Brange'][0][1] - ranges['Brange'][0][0]
-g_scope = ranges['Grange'][0][1] - ranges['Grange'][0][0]
-x_scope = ranges['Xrange'][0][1] - ranges['Xrange'][0][0]
-y_scope = ranges['Yrange'][0][1] - ranges['Yrange'][0][0]
-r_scope = ranges['Rrange'][0][1] - ranges['Rrange'][0][0]
-min_scope_abg = min(a_scope, b_scope, g_scope)
-min_scope_xyr = min(x_scope, y_scope, r_scope)
-a_scale = math.sqrt(a_scope / min_scope_abg)
-b_scale = math.sqrt(b_scope / min_scope_abg)
-g_scale = math.sqrt(g_scope / min_scope_abg)
-abg_scale = [a_scale, b_scale, g_scale]
-x_scale = math.sqrt(x_scope / min_scope_xyr)
-y_scale = math.sqrt(y_scope / min_scope_xyr)
-r_scale = math.sqrt(r_scope / min_scope_xyr)
-xyr_scale = [x_scale, y_scale, r_scale]
+
+overlay = OverLay(opt.obj_id)
+overlay.K = [[opt.fx, 0, opt.ox],
+             [0, opt.fy, opt.oy],
+             [0, 0, 1]]
+overlay.cad_path = osp.join(osp.join(opt.data_path_root, 'CADmodels', 'stl'), str(opt.obj_id) + '.stl')
+overlay.save_path = osp.join(opt.vis_path, 'test_overlay')
+overlay.eight_path = osp.join(osp.join(opt.data_path_root, 'eight_points.yml'))
+if not os.path.exists(overlay.save_path):
+    mkdir(overlay.save_path)
 
 
-class SSIM_Loss(SSIM):
-    def forward(self, img1, img2):
-        return 100 * (1 - super(SSIM_Loss, self).forward(img1, img2))
+def pick_loss(output, target):
+    np.place(output, output > 0.4, 1)
+    np.place(target, target > 0, 1)
+    loss_match = np.sum(output.astype(np.uint8) & target.astype(np.uint8))
+    loss_not_match = np.sum(np.logical_xor(output.astype(np.uint8), target.astype(np.uint8)))
+    loss_final = loss_match - loss_not_match
+    return -loss_final.astype(np.long), loss_not_match, loss_match
 
 
-min_max_list = [[amin, amax],
-                [bmin, bmax],
-                [gmin, gmax],
-                [xmin, xmax],
-                [ymin, ymax],
-                [rmin, rmax]]
-
-
-def min_max(pose):
-    pose_new = np.zeros(6)
-    pose_new[0] = (pose[0] - amin) / (amax - amin)
-    pose_new[1] = (pose[1] - bmin) / (bmax - bmin)
-    pose_new[2] = (pose[2] - gmin) / (gmax - gmin)
-    pose_new[3] = (pose[3] - xmin) / (xmax - xmin)
-    pose_new[4] = (pose[4] - ymin) / (ymax - ymin)
-    pose_new[5] = (pose[5] - rmin) / (rmax - rmin)
-    return pose_new
-
-
-def min_max_rollback(pose_new):
-    pose = np.zeros(6)
-    pose[0] = pose_new[0] * (amax - amin) + amin
-    pose[1] = pose_new[1] * (bmax - bmin) + bmin
-    pose[2] = pose_new[2] * (gmax - gmin) + gmin
-    pose[3] = pose_new[3] * (xmax - xmin) + xmin
-    pose[4] = pose_new[4] * (ymax - ymin) + ymin
-    pose[5] = pose_new[5] * (rmax - rmin) + rmin
-    return pose
-
-
-def pose_iterative(model, img, xywh, loss_meter, is_refine=None, mask=None, mask_small=None):
+def pose_iterative(model, img, xywh, loss_meter, is_refine=None, mask=None, mask_small=None, batch=64):
     if is_refine:
         if mask is not None and mask_small is not None:
             u, v, target_img = clip_and_scaling(img, xywh, opt.bbox_len, mask, mask_small)
@@ -89,12 +57,10 @@ def pose_iterative(model, img, xywh, loss_meter, is_refine=None, mask=None, mask
     else:
         u, v, target_img = clip_and_scaling(img, xywh, opt.bbox_len)
     target_img = target_img.astype(np.float32) / 255.
-    batch = 64
     z2 = np.zeros((batch, 6))
     z1 = np.zeros((batch, 2))
     x2 = np.zeros((batch, 128, 128))
-    for i in range(batch):
-        print("process {} init".format(i + 1))
+    for i in tqdm(range(batch)):
         z2[i] = np.array([min_max(creatPose(u, v))])
         z1[i] = np.array([[u, v]])
         x2[i] = target_img
@@ -131,20 +97,12 @@ def pose_iterative(model, img, xywh, loss_meter, is_refine=None, mask=None, mask
                     z2[j] = Variable(torch.as_tensor(min_max(creatPose(u, v)), dtype=torch.float32)).to(device)
         z2.requires_grad = True
         output = model(torch.cat((z2, z1), 1))
-        # if i == 0:
-        #     save_example_im_double(x2, output, 0, is_test=True)
         loss = F.binary_cross_entropy(output, x2)
         # 反向传播与优化
         # 清空上一步的残余更新参数值
         optimizer.zero_grad()
         # 误差反向传播, 计算参数更新值
         loss.mean().backward()
-        # 按照范围更新梯度
-        # for dimen in range(len(z2)):
-        #     for abg_dim in range(3):
-        #         z2.grad[dimen][abg_dim] = z2.grad[dimen][abg_dim] / abg_scale[abg_dim]
-        #     for xyr_dim in range(3, 6):
-        #         z2.grad[dimen][xyr_dim] = z2.grad[dimen][xyr_dim] / xyr_scale[xyr_dim - 3]
         # 将参数更新值施加到VAE model的parameters上
         optimizer.step()
         loss_meter.add(loss.data.cpu())
@@ -157,11 +115,11 @@ def pose_iterative(model, img, xywh, loss_meter, is_refine=None, mask=None, mask
             if update_times[key] > tolerant_thr:
                 del update_times[key]
         if i % opt.adjust == 0:
-            if is_refine:
-                save_example_im_double(x2, output, save_index + 10000, is_test=True)
-            else:
-                save_example_im_double(x2, output, save_index, is_test=True)
-            save_index += 1
+            # if is_refine:
+            #     save_example_im_double(x2, output, save_index + 10000, is_test=True)
+            # else:
+            #     save_example_im_double(x2, output, save_index, is_test=True)
+            # save_index += 1
             writer_test.add_scalar('lr', optimizer.param_groups[0]['lr'], index)
             index += 1
     return z2, z1, x2, u, v
@@ -196,45 +154,39 @@ def create_mask(contour_numpy, u, v):
     return constant, dilation
 
 
-def get_result(loss_meter, z2, z1, x2, model, is_refine=None):
+def get_result(loss_meter, z2, z1, x2, model, is_refine=None, result_pick_all=None, result_numpy_all=None, bottom=None):
     loss_meter.reset()
     result = torch.cat((z2, z1), 1)
-    scores = np.zeros((len(result), 1))
+    if is_refine:
+        output = model(result)
+        save_example_im_double(x2, output, len(result_pick_all) + 1, is_test=True)
     loss_min = 10000000
     loss_min_index = 0
     for dim in range(len(result)):
         output = model(result[dim].view((1, 8)))
-        loss = F.binary_cross_entropy(output, x2[0].view((1, 128, 128)))
+        # loss = F.binary_cross_entropy(output, x2[0].view((1, 128, 128)))
+        loss, match_loss, not_match_loss = pick_loss(output[0].cpu().detach().numpy(),
+                                                     x2[0].view((128, 128)).cpu().detach().numpy())
+        output_show = copy.deepcopy(output[0].cpu().detach().numpy())
+        np.place(output_show, output_show > 0.4, 255)
+        cv2.imwrite(osp.join(opt.vis_path, str(dim) + '.jpg'), output_show)
+        print("result %s loss is %s loss2 is %s loss3 is %s" % (dim, loss, match_loss, not_match_loss))
         if loss < loss_min:
             loss_min_index = dim
             loss_min = loss
-        loss_meter.add(loss.data.cpu())
-        scores[dim] = loss.data.cpu()
-    result_numpy = result.cpu().detach().numpy()
-    if is_refine:
-        np.save('../data/result_all.npy', result_numpy)
-    del_index = []
-    for index, score in enumerate(scores):
-        if score > loss_meter.value()[0].cpu().numpy():
-            del_index.append(index)
-    best = result_numpy[loss_min_index]
+
+    best = result.cpu().detach().numpy()[loss_min_index]
     contour_best = model(result[loss_min_index].view((1, 8))).cpu().detach().numpy()
-    result_pick = np.concatenate([np.delete(result_numpy, del_index, axis=0), best.reshape((1, 8))], axis=0)
+    result_pick = best.reshape((1, 8))
     if is_refine:
-        np.save('../data/result_pick.npy', result_pick)
-    return contour_best
+        result_pick_all.append(min_max_rollback(result_pick[0]))
+
+    return contour_best, result_pick_all
 
 
 def test(scene_id):
+    result_pick, result_numpy = [], []
     scene_path = osp.join(opt.test_data_root, 'scene' + str(scene_id))
-    img = cv2.imread(osp.join(scene_path, 'rgb', '6.jpg'))
-    random_bbox = read_yaml(osp.join(scene_path, 'bboxOffset.yml'))
-    xywh = None
-    for i in random_bbox['10']:
-        if i['obj_id'] == opt.obj_id:
-            xywh = i['xywh']
-            break
-
     model = VAE_NEW(opt.latent_dim, opt.dim)
     model = nn.DataParallel(model).to(device)
     if osp.exists(opt.save_model_path):
@@ -248,14 +200,25 @@ def test(scene_id):
                 torch.load(os.path.join(opt.save_model_path, str(pth) + ".pth")))
     model.eval()
     loss_meter = meter.AverageValueMeter()
-    z2, z1, x2, u, v = pose_iterative(model, img, xywh, loss_meter)
+    for i in range(6):
+        print(i)
+        img = cv2.imread(osp.join(scene_path, 'rgb', str(i + 1) + '.jpg'))
+        random_bbox = read_yaml(osp.join(scene_path, 'ssdResult.yml'))
+        xywh = None
+        for i in random_bbox[str(i + 1)]:
+            if i['obj_id'] == opt.obj_id:
+                xywh = i['xywh']
+                break
+        z2, z1, x2, u, v = pose_iterative(model, img, xywh, loss_meter)
 
-    mask, mask_small = create_mask(get_result(loss_meter, z2, z1, x2, model), u, v)
-    z2, z1, x2, u, v = pose_iterative(model, img, xywh, loss_meter, True, mask, mask_small)
-    get_result(loss_meter, z2, z1, x2, model, True)
+        mask, mask_small = create_mask(get_result(loss_meter, z2, z1, x2, model)[0], u, v)
+        z2, z1, x2, u, v = pose_iterative(model, img, xywh, loss_meter, True, mask, mask_small)
+        _, result_pick = get_result(loss_meter, z2, z1, x2, model, True, result_pick, result_numpy, img)
+    np.save('../data/result_pick.npy', np.array(result_pick))
 
 
 def val(val_dataloader, model, epoch):
+    target, output, loss_cross = None, None, None
     model.eval()
     for (data, label) in tqdm(val_dataloader):
         input = torch.as_tensor(label, dtype=torch.float32)
@@ -304,7 +267,6 @@ def train():
 
     loss_meter = meter.AverageValueMeter()
     index = pth * 2
-    ssim_loss = SSIM_Loss(win_size=5, win_sigma=1.5, data_range=1, size_average=True, channel=1, nonnegative_ssim=True)
     for j in range(pth, opt.max_epoch):
         loss_meter.reset()
         for i, (data, label) in tqdm(enumerate(train_dataloader)):
