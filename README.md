@@ -1,6 +1,10 @@
 # G-GOP
 G-GOP is a new **feature-to-image** pose estimation method so as to deal with the discrete template substitution error (DTS error) and the center approximation substitution error (CAS error).
 
+## Video
+
+![video_new](README.assets/video_new.gif)
+
 ## Installation
 
 1. Set up the python environment:
