@@ -13,12 +13,12 @@ from dataset import GenImg
 from tqdm import tqdm
 from torch.autograd import Variable
 from torch.utils.data import DataLoader
-
+from multiprocessing import Pool
 import warnings
 from torchnet import meter
 import random
 import copy
-from overlayAbg import OverLay
+from ruamel import yaml
 
 warnings.filterwarnings('ignore')
 from tensorboardX import SummaryWriter
@@ -28,16 +28,6 @@ init()
 device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
 writer_train = SummaryWriter(opt.log_train)
 writer_test = SummaryWriter(opt.log_test)
-
-overlay = OverLay(opt.obj_id)
-overlay.K = [[opt.fx, 0, opt.ox],
-             [0, opt.fy, opt.oy],
-             [0, 0, 1]]
-overlay.cad_path = osp.join(osp.join(opt.data_path_root, 'CADmodels', 'stl'), str(opt.obj_id) + '.stl')
-overlay.save_path = osp.join(opt.vis_path, 'test_overlay')
-overlay.eight_path = osp.join(osp.join(opt.data_path_root, 'eight_points.yml'))
-if not os.path.exists(overlay.save_path):
-    mkdir(overlay.save_path)
 
 
 def pick_loss(output, target):
@@ -81,7 +71,6 @@ def pose_iterative(model, img, xywh, loss_meter, is_refine=None, mask=None, mask
     index = 1
     update_times = {}
     tolerant_thr = 10
-    save_index = 0
     for i in tqdm(range(opt.test_ite)):
         for j in range(batch):
             z2_numpy = copy.deepcopy(z2).cpu().detach().numpy()
@@ -107,22 +96,17 @@ def pose_iterative(model, img, xywh, loss_meter, is_refine=None, mask=None, mask
         # 将参数更新值施加到VAE model的parameters上
         optimizer.step()
         loss_meter.add(loss.data.cpu())
-        if is_refine:
-            writer_test.add_scalar('loss', loss_meter.value()[0], i + opt.test_ite)
-        else:
-            writer_test.add_scalar('loss', loss_meter.value()[0], i)
+        # if is_refine:
+        #     writer_test.add_scalar('loss', loss_meter.value()[0], i + opt.test_ite)
+        # else:
+        #     writer_test.add_scalar('loss', loss_meter.value()[0], i)
         update_times_copy = copy.deepcopy(update_times)
         for key in update_times_copy.keys():
             if update_times[key] > tolerant_thr:
                 del update_times[key]
-        if i % opt.adjust == 0:
-            # if is_refine:
-            #     save_example_im_double(x2, output, save_index + 10000, is_test=True)
-            # else:
-            #     save_example_im_double(x2, output, save_index, is_test=True)
-            # save_index += 1
-            writer_test.add_scalar('lr', optimizer.param_groups[0]['lr'], index)
-            index += 1
+        # if i % opt.adjust == 0:
+        #     writer_test.add_scalar('lr', optimizer.param_groups[0]['lr'], index)
+        #     index += 1
     return z2, z1, x2, u, v
 
 
@@ -155,12 +139,13 @@ def create_mask(contour_numpy, u, v):
     return constant, dilation
 
 
-def get_result(loss_meter, z2, z1, x2, model, is_refine=None, result_pick_all=None, result_numpy_all=None, bottom=None):
+def get_result(loss_meter, z2, z1, x2, model, img_index, is_refine=None):
+    output_all = []
     loss_meter.reset()
     result = torch.cat((z2, z1), 1)
     if is_refine:
-        output = model(result)
-        save_example_im_double(x2, output, len(result_pick_all) + 1, is_test=True)
+        output_all = model(result)
+        save_example_im_double(x2, output_all, int(img_index), is_test=True)
     loss_min = 10000000
     loss_min_index = 0
     for dim in range(len(result)):
@@ -170,7 +155,7 @@ def get_result(loss_meter, z2, z1, x2, model, is_refine=None, result_pick_all=No
                                                      x2[0].view((128, 128)).cpu().detach().numpy())
         output_show = copy.deepcopy(output[0].cpu().detach().numpy())
         np.place(output_show, output_show > 0.4, 255)
-        cv2.imwrite(osp.join(opt.vis_path, str(dim) + '.jpg'), output_show)
+        # cv2.imwrite(osp.join(opt.vis_path, str(dim) + '.jpg'), output_show)
         # print("result %s loss is %s loss2 is %s loss3 is %s" % (dim, loss, match_loss, not_match_loss))
         if loss < loss_min:
             loss_min_index = dim
@@ -178,22 +163,42 @@ def get_result(loss_meter, z2, z1, x2, model, is_refine=None, result_pick_all=No
 
     best = result.cpu().detach().numpy()[loss_min_index]
     contour_best = model(result[loss_min_index].view((1, 8))).cpu().detach().numpy()
+    img_best = output_all.cpu().detach().numpy()[loss_min_index]
     result_pick = best.reshape((1, 8))
-    if is_refine:
-        result_pick_all.append(min_max_rollback(result_pick[0]))
 
-    return contour_best, result_pick_all
+    return contour_best, result_pick, img_best
+
+
+def mutil_test(scene_path, img_index, model, loss_meter):
+    img = cv2.imread(osp.join(scene_path, 'rgb', str(img_index) + '.jpg'))
+    random_bbox = read_yaml(osp.join(scene_path, 'ssdResult.yml'))
+    xywh = None
+    for i in random_bbox[str(img_index)]:
+        if i['obj_id'] == opt.obj_id:
+            xywh = i['xywh']
+            break
+    z2, z1, x2, u, v = pose_iterative(model, img, xywh, loss_meter)
+    _, result_pick, img_best = get_result(loss_meter, z2, z1, x2, model, img_index, True)
+    # mask, mask_small = create_mask(get_result(loss_meter, z2, z1, x2, model)[0], u, v)
+    # z2, z1, x2, u, v = pose_iterative(model, img, xywh, loss_meter, True, mask, mask_small)
+    # _, result_pick = get_result(loss_meter, z2, z1, x2, model, True, result_pick, result_numpy, img)
+    return result_pick, img_best, img_index, u, v
+
+
+def save_yaml(dic, file_name):
+    yaml_file = osp.join(opt.data_path, str(file_name) + '.yml')
+    file = open(yaml_file, 'w', encoding='utf-8')
+    yaml.dump(dic, file, Dumper=yaml.RoundTripDumper)
+    file.close()
 
 
 def test(scene_dir_name):
-    result_pick, result_numpy = [], []
     scene_path = osp.join(opt.test_data_root, scene_dir_name)
     model = VAE_NEW(opt.latent_dim, opt.dim)
     model = nn.DataParallel(model).to(device)
     if osp.exists(opt.save_model_path):
         pths = [int(pth.split(".")[0]) for pth in os.listdir(opt.save_model_path) if
                 "pth" in pth and "optim" not in pth]
-        pth = 0
         if len(pths) != 0:
             pth = max(pths)
             print("Load model: {}".format(os.path.join(opt.save_model_path, "{}.pth".format(pth))))
@@ -201,21 +206,24 @@ def test(scene_dir_name):
                 torch.load(os.path.join(opt.save_model_path, str(pth) + ".pth")))
     model.eval()
     loss_meter = meter.AverageValueMeter()
-    for i in range(6):
-        print(i)
-        img = cv2.imread(osp.join(scene_path, 'rgb', str(i + 1) + '.jpg'))
-        random_bbox = read_yaml(osp.join(scene_path, 'ssdResult.yml'))
-        xywh = None
-        for i in random_bbox[str(i + 1)]:
-            if i['obj_id'] == opt.obj_id:
-                xywh = i['xywh']
-                break
-        z2, z1, x2, u, v = pose_iterative(model, img, xywh, loss_meter)
-
-        mask, mask_small = create_mask(get_result(loss_meter, z2, z1, x2, model)[0], u, v)
-        z2, z1, x2, u, v = pose_iterative(model, img, xywh, loss_meter, True, mask, mask_small)
-        _, result_pick = get_result(loss_meter, z2, z1, x2, model, True, result_pick, result_numpy, img)
-    np.save('../data/result_pick.npy', np.array(result_pick))
+    pool = Pool(processes=3)
+    res_l = []
+    for i in range(2):
+        ret = pool.apply_async(mutil_test, args=(scene_path, i + 1, model, loss_meter))
+        res_l.append(ret)
+    pool.close()
+    pool.join()
+    img_all = np.zeros((len(res_l), 128, 128))
+    result_pick_all = np.zeros((len(res_l), 1, 8))
+    uv_all = np.zeros((len(res_l), 2))
+    for res in res_l:
+        result_pick, img_best, img_index, u, v = res.get()
+        img_all[int(img_index) - 1] = img_best
+        result_pick_all[int(img_index) - 1] = result_pick
+        uv_all[int(img_index) - 1] = [u, v]
+    np.save(osp.join(opt.data_path, 'result_pick_all.npy'), result_pick_all)
+    np.save(osp.join(opt.data_path, 'img_all.npy'), img_all)
+    np.save(osp.join(opt.data_path, 'uv_all.npy'), uv_all)
 
 
 def val(val_dataloader, model, epoch):
@@ -305,6 +313,7 @@ def train():
 
 
 if __name__ == '__main__':
+    torch.multiprocessing.set_start_method('spawn', force=True)
     parser = argparse.ArgumentParser()
     parser.add_argument("--train", type=bool, default=False)
     parser.add_argument("--scene_dir_name", type=str, default='scene23')
