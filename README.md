@@ -5,6 +5,8 @@ G-GOP is a new **feature-to-image** pose estimation method so as to deal with th
 
 ![video_new](README.assets/video_new.gif)
 
+You can download the relevant data to generate the above video [here](https://1drv.ms/u/s!AiwRMXEmaB9wjApqumpIToF_dcCD?e=FfvNiG), and then use the main.py of scipt_for_video to generate the above video.
+
 ## Installation
 
 1. Set up the python environment:
