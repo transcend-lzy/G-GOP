@@ -143,9 +143,8 @@ def get_result(loss_meter, z2, z1, x2, model, img_index, is_refine=None):
     output_all = []
     loss_meter.reset()
     result = torch.cat((z2, z1), 1)
-    if is_refine:
-        output_all = model(result)
-        save_example_im_double(x2, output_all, int(img_index), is_test=True)
+    output_all = model(result)
+    # save_example_im_double(x2, output_all, int(img_index), is_test=True)
     loss_min = 10000000
     loss_min_index = 0
     for dim in range(len(result)):
@@ -164,24 +163,26 @@ def get_result(loss_meter, z2, z1, x2, model, img_index, is_refine=None):
     best = result.cpu().detach().numpy()[loss_min_index]
     contour_best = model(result[loss_min_index].view((1, 8))).cpu().detach().numpy()
     img_best = output_all.cpu().detach().numpy()[loss_min_index]
-    result_pick = best.reshape((1, 8))
+    result_pick = min_max_rollback(best.reshape((1, 8))[0][:6])
 
     return contour_best, result_pick, img_best
 
 
-def mutil_test(scene_path, img_index, model, loss_meter):
-    img = cv2.imread(osp.join(scene_path, 'rgb', str(img_index) + '.jpg'))
+def mutil_test(scene_path, img_index, model, loss_meter, only_one=False):
+    img = cv2.imread(osp.join(scene_path, 'rgb', str(img_index) + '.png'))
     random_bbox = read_yaml(osp.join(scene_path, 'ssdResult.yml'))
     xywh = None
     for i in random_bbox[str(img_index)]:
-        if i['obj_id'] == opt.obj_id:
+        if int(i['obj_id']) == opt.obj_id:
             xywh = i['xywh']
             break
     z2, z1, x2, u, v = pose_iterative(model, img, xywh, loss_meter)
-    _, result_pick, img_best = get_result(loss_meter, z2, z1, x2, model, img_index, True)
-    # mask, mask_small = create_mask(get_result(loss_meter, z2, z1, x2, model)[0], u, v)
-    # z2, z1, x2, u, v = pose_iterative(model, img, xywh, loss_meter, True, mask, mask_small)
-    # _, result_pick = get_result(loss_meter, z2, z1, x2, model, True, result_pick, result_numpy, img)
+    if only_one:
+        _, result_pick, img_best = get_result(loss_meter, z2, z1, x2, model, img_index, True)
+        return result_pick, img_best, img_index, u, v
+    mask, mask_small = create_mask(get_result(loss_meter, z2, z1, x2, model, img_index)[0], u, v)
+    z2, z1, x2, u, v = pose_iterative(model, img, xywh, loss_meter, True, mask, mask_small)
+    _, result_pick, img_best = get_result(loss_meter, z2, z1, x2, model, True)
     return result_pick, img_best, img_index, u, v
 
 
@@ -208,13 +209,13 @@ def test(scene_dir_name):
     loss_meter = meter.AverageValueMeter()
     pool = Pool(processes=3)
     res_l = []
-    for i in range(2):
+    for i in tqdm(range(1)):
         ret = pool.apply_async(mutil_test, args=(scene_path, i + 1, model, loss_meter))
         res_l.append(ret)
     pool.close()
     pool.join()
     img_all = np.zeros((len(res_l), 128, 128))
-    result_pick_all = np.zeros((len(res_l), 1, 8))
+    result_pick_all = np.zeros((len(res_l), 1, 6))
     uv_all = np.zeros((len(res_l), 2))
     for res in res_l:
         result_pick, img_best, img_index, u, v = res.get()
@@ -312,11 +313,40 @@ def train():
                        os.path.join(opt.save_model_path, "optim" + str(j + 1) + ".pth"))
 
 
+def overlay_img():
+    img_all = np.load(osp.join(opt.data_path, 'img_all.npy'), allow_pickle=True)
+    uv_all = np.load(osp.join(opt.data_path, 'uv_all.npy'), allow_pickle=True)
+    for i in tqdm(range(215)):
+        u, v = int(uv_all[i][0]), int(uv_all[i][1])
+        top = v
+        bottom = 2048 - opt.bbox_len - v
+        left = u
+        right = 2448 - opt.bbox_len - u
+        # show_photos([img_all[i]])
+        np.place(img_all[i], img_all[i] > 0.4, 255)
+        ret, binary = cv2.threshold(img_all[i], 10, 255, cv2.THRESH_BINARY)
+        # show_photos([binary])
+        dilation = cv2.resize(binary, (opt.bbox_len, opt.bbox_len), interpolation=cv2.INTER_AREA)
+        constant = cv2.copyMakeBorder(dilation, top, bottom, left, right, cv2.BORDER_CONSTANT)
+        img = cv2.imread(osp.join(opt.test_data_root, 'video_data', 'rgb', str(i + 1) + '.png'))
+        height, width = 2048, 2448
+        im3 = np.zeros((height, width, 3))
+        pix_where = np.argwhere(constant)
+        color = [0, 255, 0]
+        for pixel in pix_where:
+            im3[pixel[0]][pixel[1]] = color
+        overlay = cv2.addWeighted(img, 1, im3.astype(np.uint8), 0.5, 0)
+        # show_photos([overlay])
+        cv2.imwrite(osp.join(opt.test_data_root, 'video_overlay', str(i + 1) + '.png'), overlay)
+    # show_photos([overlay])
+
+
 if __name__ == '__main__':
+    # overlay_img()
     torch.multiprocessing.set_start_method('spawn', force=True)
     parser = argparse.ArgumentParser()
     parser.add_argument("--train", type=bool, default=False)
-    parser.add_argument("--scene_dir_name", type=str, default='scene23')
+    parser.add_argument("--scene_dir_name", type=str, default='video_data')
 
     args = parser.parse_args()
     if args.train:

@@ -316,9 +316,7 @@ def val_ab(a, b):
 
 
 def creatPose(u_tar, v_tar):
-    try_times = 80
-
-    sample_num = len(points)
+    try_times = 1
     while True:
         while True:  # 这里while true做的就是把xyz转化为了ab
             index = np.random.randint(len(points))  # sample_num是斐波那契球的全部数量
@@ -377,14 +375,15 @@ def creatPose(u_tar, v_tar):
         center_x, center_y = int(np.round(center[0])), int(np.round(center[1]))
         if center_x <= opt.bbox_len // 2 or center_x >= opt.width - opt.bbox_len // 2 or center_y <= opt.bbox_len // 2 or center_y >= opt.height - opt.bbox_len // 2:
             continue
+        return [a, b, g, x, y, r]
 
-        for i in range(try_times):
-            x_new, y_new, r_new = 0, 0, 0
-            for j in trans:
-                x_new = x + j[0] * i * 2
-                y_new = z + j[1] * i * 2
-                r_new = r + j[1] * i * 4
-                if val_pose(a, b, g, x_new, y_new, r_new, u_tar, v_tar, is_create_val=True, spe_points2D=spe_points2D):
-                    return [a, b, g, x_new, y_new, r_new]
-            if not val_xyr(x_new, y_new, r_new):
-                break
+        # for i in range(try_times):
+        #     x_new, y_new, r_new = 0, 0, 0
+        #     for j in trans:
+        #         x_new = x + j[0] * i * 2
+        #         y_new = z + j[1] * i * 2
+        #         r_new = r + j[1] * i * 4
+        #         if val_pose(a, b, g, x_new, y_new, r_new, u_tar, v_tar, is_create_val=True, spe_points2D=spe_points2D):
+        #             return [a, b, g, x_new, y_new, r_new]
+        #     if not val_xyr(x_new, y_new, r_new):
+        #         break
