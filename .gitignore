@@ -12,8 +12,6 @@
 /generate_dataset
 # ignore video
 /video
-
-/code_for_G-GOP_ori
 /script_for_video/fibonacci.npy
 /script_for_video/video_img
 /script_for_video/checkpoint
