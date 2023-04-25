@@ -1,0 +1,24 @@
+# ignore logs
+/logs
+# igonre checkpoints
+/checkpoint
+# ignore  vis
+/vis
+# ignore drawVideo
+/drawVideo
+# ignore data 
+/data
+# ignore generate_dataset
+/generate_dataset
+# ignore video
+/video
+
+/code_for_G-GOP_ori
+/script_for_video/fibonacci.npy
+/script_for_video/video_img
+/script_for_video/checkpoint
+/script_for_video/.idea
+/script_for_video/final_img
+/script_for_video/final_img_crop
+/script_for_video/video_new.avi
+/script_for_video/img_all.npy

@@ -1,0 +1,11 @@
+opencv-python~=4.5.5.64
+numpy~=1.21.5
+pillow~=6.2.1
+matplotlib~=3.5.1
+tqdm~=4.64.0
+torchnet~=0.0.4
+tensorboardx~=2.4
+torchvision~=0.11.2
+yaml~=0.2.5
+pyyaml~=6.0
+pygame~=1.9.6
